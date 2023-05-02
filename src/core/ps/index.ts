@@ -197,7 +197,6 @@ export default class Ps {
     this.options = {
       selectAll: false,
       selectBy: {} as Options['selectBy'],
-      // raw: false, // 默认格式化成统一且美观的格式
     };
     this.spec2Keys = {};
     this.taskQueue = [];
@@ -379,6 +378,19 @@ export default class Ps {
     return result;
   }
 
+  psWrapper(params: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const cmd = `ps ${params}`;
+      exec(cmd, (err, stdout) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(stdout);
+      });
+    });
+  }
+
   async execute(): Promise<Record<OutputKey, unknown>[]> {
     while (this.taskQueue.length) {
       await (this.taskQueue.shift() as Task)();
@@ -386,16 +398,14 @@ export default class Ps {
     if (!this.hasInitedKeys) {
       await this._output(Ps.defaultKeys);
     }
-    return new Promise((resolve, reject) => {
-      const cmd = `ps ${this.createParams()}`;
-      console.log('cmd: ', cmd);
-      exec(cmd, (err, stdout) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve(this.format(stdout));
-      });
-    });
+
+    const stdout = await this.psWrapper(this.createParams());
+
+    return this.format(stdout);
+  }
+
+  // 直接通过"ps -e -o pid,tty"这种原始的形式执行
+  raw(params: string) {
+    return this.psWrapper(params);
   }
 }

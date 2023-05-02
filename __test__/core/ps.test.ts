@@ -48,14 +48,19 @@ describe('ps', () => {
     expect(result.length).toBeGreaterThan(0);
     expect(result.every((item) => item.uid === 'root')).toBe(false);
   });
+  test('execute method has input, act as command line', async () => {
+    const result = await ps.raw('-e -o pid,tty -U root');
+    expect(result).toEqual(expect.stringContaining('PID'));
+    expect(result).toEqual(expect.stringContaining('TTY'));
+  });
   test('get pcpu pmem', async () => {
     const result = await ps
-      .selectBy('tty', 'ttys027')
-      .output(['pcpu', 'pmem', 'etime', 'tty'])
+      .selectBy('ruid', 'root')
+      .output(['pcpu', 'pmem', 'etime', 'tty', 'ruid'])
       .execute();
     console.log('===result===', result);
     expect(Array.isArray(result)).toBe(true);
     expect(result.length).toBeGreaterThan(0);
-    expect(result.every((item) => item.uid === 'root')).toBe(false);
+    expect(result.every((item) => item.ruid === 'root')).toBe(false);
   });
 });
