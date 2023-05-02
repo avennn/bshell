@@ -109,8 +109,8 @@ type KeyField = (string | FieldTransformer)[];
 
 function generateKey2FieldMap() {
   const originMap: Record<OutputKey, KeyField> = {
-    [PsOutputKey.pid]: ['pid'],
-    [PsOutputKey.ppid]: ['ppid'],
+    [PsOutputKey.pid]: [{ field: 'pid', transformer: parseInt }],
+    [PsOutputKey.ppid]: [{ field: 'ppid', transformer: parseInt }],
     [PsOutputKey.tty]: ['tty', 'tt'].map((field) => ({
       field,
       transformer: tt2ttyTransformer,
@@ -123,9 +123,12 @@ function generateKey2FieldMap() {
       field,
       transformer: cmd2ArgsTransformer,
     })),
-    [PsOutputKey.uid]: ['uid', 'euid'],
+    [PsOutputKey.uid]: ['uid', 'euid'].map((field) => ({
+      field,
+      transformer: parseInt,
+    })),
     [PsOutputKey.user]: ['user', 'euser'],
-    [PsOutputKey.ruid]: ['ruid'],
+    [PsOutputKey.ruid]: [{ field: 'ruid', transformer: parseInt }],
     [PsOutputKey.ruser]: ['ruser'],
     [PsOutputKey.pcpu]: ['pcpu', '%cpu'].map((field) => ({
       field,
@@ -271,7 +274,7 @@ export default class Ps extends Command {
     return this;
   }
 
-  async _output(expectKeys: ExpectKey[] | (() => ExpectKey[])): Promise<void> {
+  async #_output(expectKeys: ExpectKey[] | (() => ExpectKey[])): Promise<void> {
     const avaliableCols = await Ps.getAvaliableFields();
     const keys = typeof expectKeys === 'function' ? expectKeys() : expectKeys;
 
@@ -307,7 +310,7 @@ export default class Ps extends Command {
   }
 
   output(expectKeys: ExpectKey[] | (() => ExpectKey[])): Ps {
-    this.addTask(() => this._output(expectKeys));
+    this.addTask(() => this.#_output(expectKeys));
     return this;
   }
 
@@ -391,7 +394,7 @@ export default class Ps extends Command {
       await (this.taskQueue.shift() as Task)();
     }
     if (!this.hasInitedKeys) {
-      await this._output(Ps.defaultKeys);
+      await this.#_output(Ps.defaultKeys);
     }
 
     const stdout = await this.psWrapper(this.createParams());
