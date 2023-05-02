@@ -23,29 +23,43 @@
 // r只在跑着的进程
 import { exec } from 'child_process';
 
-type Function = (input: Ps) => any;
-
 interface Options {
-  realUserIdOrNameList: (string | number)[];
-  effectiveUserIdOrNameList: (string | number)[];
-  all: boolean;
+  selectAll: boolean;
+  selectBy: Record<OutputKey, unknown[]>;
 }
 
-export enum PsFormattedKey {
+// consistent with type OutputKey, Ps.avaliableOutputKeys
+export enum PsOutputKey {
   pid = 'pid',
   tty = 'tty',
   cputime = 'cputime',
   command = 'command',
   arguments = 'arguments',
+  uid = 'uid',
+  user = 'user',
+  ruid = 'ruid',
+  ruser = 'ruser',
 }
 
-type FormattedKey =
-  | PsFormattedKey
+// consistent with enum PsOutputKey, Ps.avaliableOutputKeys
+type OutputKey = [
+  'pid',
+  'tty',
+  'cputime',
+  'command',
+  'arguments',
+  'uid',
+  'user',
+  'ruid',
+  'ruser'
+][number];
+
+type ExpectKey =
+  | OutputKey
   | {
-      key: PsFormattedKey;
-      cols?: string[]; // 自定义key对应的col，如果没有，则使用内部推断的
-      transformer?: (source: string) => string;
-      noArguments?: boolean; // key为command时才有效
+      key: OutputKey;
+      spec?: string; // 自定义key对应的specifier，如果没有，则使用内部推断的
+      transformer?: (source: string) => unknown;
     };
 
 const equivalentCols: string[][] = [
@@ -59,216 +73,219 @@ const equivalentCols: string[][] = [
   ['cputimes', 'times'], // 以秒为单位显示
 ];
 
-interface ColTransformer {
-  col: string;
-  transformer?: ((source?: string) => any) | null;
+type Task = () => Promise<void> | void;
+
+type Transformer = (source?: string) => unknown;
+
+interface SpecTransformer {
+  spec: string;
+  transformer?: Transformer | null;
 }
 
-type KeyColType = 'default' | 'noArguments';
-type KeyCol = {
-  [P in KeyColType]?: (string | ColTransformer)[];
-};
-type SerializeKeyCol = {
-  [P in KeyColType]?: ColTransformer[];
-};
+interface KeyTransformer {
+  key: OutputKey;
+  transformer?: Transformer | null;
+}
 
-const key2ColMap = generateKey2ColMap();
+type KeySpec = (string | SpecTransformer)[];
 
-function generateKey2ColMap() {
-  const originMap: Record<string, KeyCol> = {
-    [PsFormattedKey.pid]: {
-      default: ['pid'],
-    },
-    [PsFormattedKey.tty]: {
-      default: [
-        'tty',
-        { col: 'tt', transformer: (source?: string) => `tty${source}` },
-      ],
-    },
-    [PsFormattedKey.command]: {
-      default: ['command', 'args'],
-      noArguments: ['comm', 'ucomm', 'ucmd'],
-    },
-    [PsFormattedKey.arguments]: {
-      default: [
-        {
-          col: 'command',
-          transformer: (source?: string) => {
-            const arr = source?.trim().split(' ');
-            arr?.splice(0, 1);
-            return arr || [];
-          },
+function generateKey2SpecMap() {
+  const originMap: Record<OutputKey, KeySpec> = {
+    [PsOutputKey.pid]: ['pid'],
+    [PsOutputKey.tty]: [
+      'tty',
+      { spec: 'tt', transformer: (source?: string) => `tty${source}` },
+    ],
+    [PsOutputKey.cputime]: ['cputime', 'time'],
+    // 后3个不包含参数
+    // TODO: 是否需要区分，分别返回无参数命令，包含参数命令
+    [PsOutputKey.command]: ['command', 'args', 'comm', 'ucomm', 'ucmd'],
+    [PsOutputKey.arguments]: [
+      {
+        spec: 'command',
+        // TODO: 适配
+        transformer: (source?: string) => {
+          const arr = source?.trim().split(' ');
+          arr?.splice(0, 1);
+          return arr || [];
         },
-        {
-          col: 'args',
-          transformer: (source?: string) => {
-            const arr = source?.trim().split(' ');
-            arr?.splice(0, 1);
-            return arr || [];
-          },
+      },
+      {
+        spec: 'args',
+        transformer: (source?: string) => {
+          const arr = source?.trim().split(' ');
+          arr?.splice(0, 1);
+          return arr || [];
         },
-      ],
-    },
-    [PsFormattedKey.cputime]: {
-      default: ['cputime', 'time'],
-    },
+      },
+    ],
+    [PsOutputKey.uid]: ['uid', 'euid'],
+    [PsOutputKey.user]: ['user', 'euser'],
+    [PsOutputKey.ruid]: ['ruid'],
+    [PsOutputKey.ruser]: ['ruser'],
   };
   // 序列化成标准格式
-  const map: Record<string, SerializeKeyCol> = {};
-  Object.keys(originMap).forEach((key) => {
-    const colObj = originMap[key];
-    map[key] = {};
-    Object.keys(colObj).forEach((type) => {
-      map[key][type as KeyColType] = [];
-      const arr = colObj[type as KeyColType];
-      arr?.forEach((item) => {
-        if (typeof item === 'string') {
-          // @ts-ignore
-          map[key][type as KeyColType].push({
-            col: item,
-            transformer: null,
-          });
-        } else if (typeof item === 'object' && item !== null) {
-          // @ts-ignore
-          map[key][type as KeyColType].push({
-            col: item.col,
-            transformer: item.transformer || null,
-          });
-        }
-      });
+  const map = {} as Record<OutputKey, SpecTransformer[]> & {
+    [index: string]: SpecTransformer[];
+  };
+  (Object.keys(originMap) as OutputKey[]).forEach((key) => {
+    const specList = originMap[key];
+    map[key] = [];
+    specList.forEach((specItem) => {
+      if (typeof specItem === 'string') {
+        (map[key] as SpecTransformer[]).push({
+          spec: specItem,
+        });
+      } else {
+        (map[key] as SpecTransformer[]).push(specItem);
+      }
     });
   });
 
   return map;
 }
 
-type Task = () => Promise<void> | void;
+const key2SpecMap = generateKey2SpecMap();
 
-type Transformer = (source?: string) => unknown;
+// consistent with enum PsOutputKey, OutputKey
+const avaliableOutputKeys = [
+  'pid',
+  'tty',
+  'cputime',
+  'command',
+  'arguments',
+  'uid',
+  'user',
+  'ruid',
+  'ruser',
+];
 
-class Ps {
+export default class Ps {
   private options: Options;
-  private col2Keys: Record<
-    string,
-    { key: PsFormattedKey; transformer?: Transformer | null }[]
-  >;
+  private spec2Keys: Record<string, KeyTransformer[]>;
   private taskQueue: Task[];
 
   static currentTty = Symbol('ps.currentTty');
   static defaultKeys = [
-    PsFormattedKey.pid,
-    PsFormattedKey.tty,
-    PsFormattedKey.cputime,
-    PsFormattedKey.command,
+    PsOutputKey.pid,
+    PsOutputKey.tty,
+    PsOutputKey.cputime,
+    PsOutputKey.command,
   ];
 
-  constructor(options?: Options) {
-    this.options = Object.assign(
-      {
-        realUserIdOrNameList: [],
-        effectiveUserIdOrNameList: [],
-        all: false,
-        raw: false, // 默认格式化成统一且美观的格式
-      },
-      options
-    );
-    this.col2Keys = {};
+  constructor() {
+    this.options = {
+      selectAll: false,
+      selectBy: {} as Options['selectBy'],
+      // raw: false, // 默认格式化成统一且美观的格式
+    };
+    this.spec2Keys = {};
     this.taskQueue = [];
   }
 
-  static getAvaliableCols(): Promise<string[]> {
+  static getAvaliableSpecs(): Promise<string[]> {
     return new Promise((resolve, reject) => {
       // 在zsh上测得
+      // TODO: 兼容不同平台
       exec('ps -L', (err, stdout) => {
         if (err) {
           reject(err);
           return;
         }
-        // 兼容不同平台换行符
+        // TODO: 兼容不同平台换行符
         resolve(stdout.trim().split(/[\s\n]/));
       });
     });
   }
 
-  keys(expectKeys: FormattedKey[] | (() => FormattedKey[])): Ps {
-    this.addTask(() => this._keys(expectKeys));
-    return this;
+  static get avaliableOutputKeys() {
+    return avaliableOutputKeys;
   }
 
-  async _keys(
-    expectKeys: FormattedKey[] | (() => FormattedKey[])
-  ): Promise<void> {
-    const avaliableCols = await Ps.getAvaliableCols();
-    const formattedKeys =
-      typeof expectKeys === 'function' ? expectKeys() : expectKeys;
+  get hasInitedKeys(): boolean {
+    return !!Object.keys(this.spec2Keys).length;
+  }
 
-    function reflectCol(reflectCols: ColTransformer[], cols: string[]) {
-      return reflectCols.find((colObj) => cols.includes(colObj.col));
-    }
-
-    formattedKeys.filter(Boolean).forEach((key) => {
-      let reflectCols: ColTransformer[] = [];
-      let realKey = '';
-      if (typeof key === 'string') {
-        realKey = key;
-        reflectCols = key2ColMap[realKey]?.default ?? [];
-      } else if (typeof key === 'object' && key !== null) {
-        realKey = key.key;
-        if (
-          Reflect.ownKeys(key).includes('noArguments') &&
-          !key.noArguments &&
-          key.key === PsFormattedKey.command
-        ) {
-          reflectCols = key2ColMap[realKey]?.noArguments ?? [];
-        }
+  get sortedSpecs(): string[] {
+    // 把cmd放到最后，便于处理文本分割
+    const specs = Object.keys(this.spec2Keys);
+    specs.sort((a) => {
+      if (['command', 'args', 'comm', 'ucomm', 'ucmd'].includes(a)) {
+        return 1;
       }
-      if (reflectCols.length) {
-        const colObj = reflectCol(reflectCols, avaliableCols);
-        if (colObj) {
-          if (!this.col2Keys[colObj.col]) {
-            this.col2Keys[colObj.col] = [];
-          }
-          this.col2Keys[colObj.col].push({
-            key: realKey as PsFormattedKey,
-            transformer: colObj.transformer,
-          });
-        }
-      }
+      return -1;
     });
+    return specs;
   }
 
   addTask(task: Task): void {
     this.taskQueue.push(task);
   }
 
-  all(): Ps {
-    this.addTask(() => this._all());
+  // Methods below are public
+  _selectAll(): void {
+    this.options['selectAll'] = true;
+  }
+
+  selectAll(): Ps {
+    this.addTask(() => this._selectAll());
     return this;
   }
 
-  _all(): void {
-    this.options['all'] = true;
-  }
-
-  filterByTty(ttyList: symbol | string[]): Ps {
-    return this;
-  }
-
-  filterByRealUserIdOrName(realUserIdOrNameList: (string | number)[]): Ps {
-    if (Array.isArray(realUserIdOrNameList) && realUserIdOrNameList.length) {
-      this.options.realUserIdOrNameList = realUserIdOrNameList;
+  _selectBy(key: OutputKey, value: unknown) {
+    const { selectBy } = this.options;
+    if (!selectBy[key]) {
+      selectBy[key] = [];
     }
+    if (Array.isArray(value)) {
+      selectBy[key].push(...value);
+    } else {
+      selectBy[key].push(value);
+    }
+  }
+
+  selectBy(key: OutputKey, value: unknown): Ps {
+    this.addTask(() => this._selectBy(key, value));
     return this;
   }
-  filterByEffectiveUserIdOrName(
-    effectiveUserIdOrNameList: (string | number)[]
-  ): Ps {
-    if (
-      Array.isArray(effectiveUserIdOrNameList) &&
-      effectiveUserIdOrNameList.length
-    ) {
-      this.options.effectiveUserIdOrNameList = effectiveUserIdOrNameList;
+
+  async _output(expectKeys: ExpectKey[] | (() => ExpectKey[])): Promise<void> {
+    const avaliableCols = await Ps.getAvaliableSpecs();
+    const keys = typeof expectKeys === 'function' ? expectKeys() : expectKeys;
+
+    function reflectSpec(reflectSpecs: SpecTransformer[], specs: string[]) {
+      return reflectSpecs.find((specObj) => specs.includes(specObj.spec));
     }
+
+    keys.filter(Boolean).forEach((key) => {
+      let reflectSpecs: SpecTransformer[] = [];
+      let realKey = '' as OutputKey;
+      if (typeof key === 'string') {
+        realKey = key;
+      } else if (typeof key === 'object' && key !== null) {
+        realKey = key.key;
+      }
+      reflectSpecs = key2SpecMap[realKey] ?? [];
+      if (reflectSpecs.length) {
+        const specObj = reflectSpec(reflectSpecs, avaliableCols);
+        if (specObj) {
+          if (!this.spec2Keys[specObj.spec]) {
+            this.spec2Keys[specObj.spec] = [];
+          }
+          const keyObj = {
+            key: realKey,
+          } as KeyTransformer;
+          if (specObj.transformer) {
+            keyObj.transformer = specObj.transformer;
+          }
+          this.spec2Keys[specObj.spec].push(keyObj);
+        }
+      }
+    });
+  }
+
+  output(expectKeys: ExpectKey[] | (() => ExpectKey[])): Ps {
+    this.addTask(() => this._output(expectKeys));
     return this;
   }
 
@@ -278,52 +295,44 @@ class Ps {
 
   createParams(): string {
     const params = [];
-    const { all, realUserIdOrNameList, effectiveUserIdOrNameList } =
-      this.options;
+    const { selectAll, selectBy } = this.options;
+    const createSelectOption = (opt: string, key: OutputKey) => {
+      if (selectBy[key]) {
+        params.push(`${opt} ${selectBy[key].join(',')}`);
+      }
+    };
 
-    if (all) {
+    if (selectAll) {
       params.push('-e');
     } else {
+      // 有效用户id或者姓名，进程使用了谁的文件访问权限
+      // uid和user查询方式一样，结果不一定跟入参一样，-u root可能返回user不是root的项
+      createSelectOption('-u', PsOutputKey.uid);
+      createSelectOption('-u', PsOutputKey.user);
       // 真实用户id或者姓名，谁创建了该进程
-      if (realUserIdOrNameList && realUserIdOrNameList.length) {
-        params.push(`-U ${realUserIdOrNameList.join(',')}`);
-      }
-      // 有效用户id或者姓名，进程使用了谁的文件访问权限，mac上跟realUserIdOrNameList是一样的
-      if (effectiveUserIdOrNameList && effectiveUserIdOrNameList.length) {
-        params.push(`-u ${effectiveUserIdOrNameList.join(',')}`);
-      }
+      // ruid和ruser查询方式一样，结果跟入参一样
+      createSelectOption('-U', PsOutputKey.ruid);
+      createSelectOption('-U', PsOutputKey.ruser);
     }
 
-    const cols = this.outputCols;
-    if (cols.length) {
-      params.push(`-o ${cols.join(',')}`);
+    const specs = this.sortedSpecs;
+    if (specs.length) {
+      params.push(`-o ${specs.join(',')}`);
     }
 
     return params.join(' ');
   }
 
-  get outputCols(): string[] {
-    // 把cmd放到最后，便于处理文本分割
-    const cols = Object.keys(this.col2Keys);
-    cols.sort((a) => {
-      if (['command', 'args', 'comm', 'ucomm', 'ucmd'].includes(a)) {
-        return 1;
-      }
-      return -1;
-    });
-    return cols;
-  }
-
   format(stdout: string): any[] {
     const rows = stdout.trim().split('\n');
-    const cols = this.outputCols;
-    const colSize = cols.length;
+    const specs = this.sortedSpecs;
+    const size = specs.length;
     const result = rows.map((row) => {
       const formatted: any = {};
       const colValues = row.trim().split(/\s+/);
       let index = 0;
       const newColValues = [];
-      while (index < colSize - 1) {
+      while (index < size - 1) {
         newColValues.push(colValues.shift());
         index++;
       }
@@ -331,7 +340,7 @@ class Ps {
         newColValues.push(colValues.join(' '));
       }
       newColValues.forEach((source, i) => {
-        const keyObjs = this.col2Keys[cols[i]];
+        const keyObjs = this.spec2Keys[specs[i]];
         keyObjs.forEach((keyObj) => {
           formatted[keyObj.key] = keyObj.transformer
             ? keyObj.transformer(source)
@@ -345,19 +354,15 @@ class Ps {
     return result;
   }
 
-  get hasInitedKeys(): boolean {
-    return !!Object.keys(this.col2Keys).length;
-  }
-
-  async execute(): Promise<unknown[]> {
+  async execute(): Promise<Record<OutputKey, unknown>[]> {
     while (this.taskQueue.length) {
       await (this.taskQueue.shift() as Task)();
     }
+    if (!this.hasInitedKeys) {
+      await this._output(Ps.defaultKeys);
+    }
     /* eslint-disable-next-line */
     return new Promise(async (resolve, reject) => {
-      if (!this.hasInitedKeys) {
-        await this._keys(Ps.defaultKeys);
-      }
       const cmd = `ps ${this.createParams()}`;
       console.log('cmd: ', cmd);
       exec(cmd, (err, stdout) => {
