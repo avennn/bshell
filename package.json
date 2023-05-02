@@ -1,11 +1,22 @@
 {
   "name": "bshell",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Provide extra portable Unix shell commands for Node.js with chaining.",
-  "main": "dist/index.js",
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=7.0.0"
+  },
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "exports": {
+    "import": "./dist/esm/index.js",
+    "require": "./dist/cjs/index.js"
+  },
   "scripts": {
     "test": "jest",
-    "build": "rm -rf ./dist && tsc",
+    "build": "rm -rf ./dist && npm run build:esm && npm run build:cjs",
+    "build:esm": "./node_modules/.bin/tsc --module nodenext --outDir dist/esm",
+    "build:cjs": "./node_modules/.bin/tsc --module commonjs --outDir dist/cjs",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -33,7 +44,7 @@
   },
   "homepage": "https://github.com/avennn/bshell#readme",
   "devDependencies": {
-    "@tsconfig/node12": "^1.0.11",
+    "@tsconfig/node16": "^1.0.3",
     "@types/jest": "^29.5.1",
     "@types/node": "^18.16.3",
     "@typescript-eslint/eslint-plugin": "^5.59.1",
@@ -46,5 +57,7 @@
     "ts-jest": "^29.1.0",
     "typescript": "^5.0.4"
   },
-  "dependencies": {}
+  "dependencies": {
+    "auto-bind": "^5.0.1"
+  }
 }

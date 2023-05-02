@@ -22,7 +22,9 @@
 // -N, --deselect反选
 // T, t 当前tty关联的进程
 // r只在跑着的进程
-import { exec } from 'child_process';
+import util from 'node:util';
+import { exec as execLegacy } from 'node:child_process';
+import Command from '../command';
 import {
   tt2ttyTransformer,
   cmd2ArgsTransformer,
@@ -30,6 +32,8 @@ import {
   formatTime2SecTransformer,
 } from './transformer';
 import type { Transformer } from './transformer';
+
+const exec = util.promisify(execLegacy);
 
 interface Options {
   selectAll: boolean;
@@ -74,7 +78,7 @@ type ExpectKey =
   | OutputKey
   | {
       key: OutputKey;
-      spec?: string; // 自定义key对应的specifier，如果没有，则使用内部推断的
+      field?: string; // 自定义key对应的field，如果没有，则使用内部推断的
       transformer?: (source: string) => unknown;
     };
 
@@ -91,8 +95,8 @@ const equivalentCols: string[][] = [
 
 type Task = () => Promise<void> | void;
 
-interface SpecTransformer {
-  spec: string;
+interface FieldTransformer {
+  field: string;
   transformer?: Transformer;
 }
 
@@ -101,59 +105,59 @@ interface KeyTransformer {
   transformer?: Transformer | null;
 }
 
-type KeySpec = (string | SpecTransformer)[];
+type KeyField = (string | FieldTransformer)[];
 
-function generateKey2SpecMap() {
-  const originMap: Record<OutputKey, KeySpec> = {
+function generateKey2FieldMap() {
+  const originMap: Record<OutputKey, KeyField> = {
     [PsOutputKey.pid]: ['pid'],
     [PsOutputKey.ppid]: ['ppid'],
-    [PsOutputKey.tty]: ['tty', 'tt'].map((spec) => ({
-      spec,
+    [PsOutputKey.tty]: ['tty', 'tt'].map((field) => ({
+      field,
       transformer: tt2ttyTransformer,
     })),
     [PsOutputKey.cputime]: ['cputime', 'time'],
     // 后3个不包含参数
     // TODO: 是否需要区分，分别返回无参数命令，包含参数命令
     [PsOutputKey.command]: ['command', 'args', 'comm', 'ucomm', 'ucmd'],
-    [PsOutputKey.arguments]: ['command', 'args'].map((spec) => ({
-      spec,
+    [PsOutputKey.arguments]: ['command', 'args'].map((field) => ({
+      field,
       transformer: cmd2ArgsTransformer,
     })),
     [PsOutputKey.uid]: ['uid', 'euid'],
     [PsOutputKey.user]: ['user', 'euser'],
     [PsOutputKey.ruid]: ['ruid'],
     [PsOutputKey.ruser]: ['ruser'],
-    [PsOutputKey.pcpu]: ['pcpu', '%cpu'].map((spec) => ({
-      spec,
+    [PsOutputKey.pcpu]: ['pcpu', '%cpu'].map((field) => ({
+      field,
       transformer: parseFloatTransformer,
     })),
-    [PsOutputKey.pmem]: ['pmem', '%mem'].map((spec) => ({
-      spec,
+    [PsOutputKey.pmem]: ['pmem', '%mem'].map((field) => ({
+      field,
       transformer: parseFloatTransformer,
     })),
     // @changed
     [PsOutputKey.etime]: [
       'etimes',
       {
-        spec: 'etime',
+        field: 'etime',
         transformer: formatTime2SecTransformer,
       },
     ],
   };
   // 序列化成标准格式
-  const map = {} as Record<OutputKey, SpecTransformer[]> & {
-    [index: string]: SpecTransformer[];
+  const map = {} as Record<OutputKey, FieldTransformer[]> & {
+    [index: string]: FieldTransformer[];
   };
   (Object.keys(originMap) as OutputKey[]).forEach((key) => {
-    const specList = originMap[key];
+    const fieldList = originMap[key];
     map[key] = [];
-    specList.forEach((specItem) => {
-      if (typeof specItem === 'string') {
-        (map[key] as SpecTransformer[]).push({
-          spec: specItem,
+    fieldList.forEach((fieldItem) => {
+      if (typeof fieldItem === 'string') {
+        (map[key] as FieldTransformer[]).push({
+          field: fieldItem,
         });
       } else {
-        (map[key] as SpecTransformer[]).push(specItem);
+        (map[key] as FieldTransformer[]).push(fieldItem);
       }
     });
   });
@@ -161,7 +165,7 @@ function generateKey2SpecMap() {
   return map;
 }
 
-const key2SpecMap = generateKey2SpecMap();
+const key2FieldMap = generateKey2FieldMap();
 
 // consistent with enum PsOutputKey, OutputKey
 const avaliableOutputKeys = [
@@ -180,9 +184,9 @@ const avaliableOutputKeys = [
   'etime',
 ];
 
-export default class Ps {
+export default class Ps extends Command {
   private options: Options;
-  private spec2Keys: Record<string, KeyTransformer[]>;
+  private field2Keys: Record<string, KeyTransformer[]>;
   private taskQueue: Task[];
 
   // static currentTty = Symbol('ps.currentTty');
@@ -194,27 +198,26 @@ export default class Ps {
   ];
 
   constructor() {
+    super();
     this.options = {
       selectAll: false,
       selectBy: {} as Options['selectBy'],
     };
-    this.spec2Keys = {};
+    this.field2Keys = {};
     this.taskQueue = [];
   }
 
-  static getAvaliableSpecs(): Promise<string[]> {
-    return new Promise((resolve, reject) => {
+  static async getAvaliableFields(): Promise<string[]> {
+    try {
       // 在zsh上测得
       // TODO: 兼容不同平台
-      exec('ps -L', (err, stdout) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        // TODO: 兼容不同平台换行符
-        resolve(stdout.trim().split(/[\s\n]/));
-      });
-    });
+      const { stdout } = await exec('ps -L');
+      // TODO: 兼容不同平台换行符
+      return stdout.trim().split(/[\s\n]/);
+    } catch (e) {
+      console.error(e);
+      return [];
+    }
   }
 
   static get avaliableOutputKeys() {
@@ -222,19 +225,19 @@ export default class Ps {
   }
 
   get hasInitedKeys(): boolean {
-    return !!Object.keys(this.spec2Keys).length;
+    return !!Object.keys(this.field2Keys).length;
   }
 
-  get sortedSpecs(): string[] {
+  get sortedFields(): string[] {
     // 把cmd放到最后，便于处理文本分割
-    const specs = Object.keys(this.spec2Keys);
-    specs.sort((a) => {
+    const fields = Object.keys(this.field2Keys);
+    fields.sort((a) => {
       if (['command', 'args', 'comm', 'ucomm', 'ucmd'].includes(a)) {
         return 1;
       }
       return -1;
     });
-    return specs;
+    return fields;
   }
 
   addTask(task: Task): void {
@@ -269,35 +272,35 @@ export default class Ps {
   }
 
   async _output(expectKeys: ExpectKey[] | (() => ExpectKey[])): Promise<void> {
-    const avaliableCols = await Ps.getAvaliableSpecs();
+    const avaliableCols = await Ps.getAvaliableFields();
     const keys = typeof expectKeys === 'function' ? expectKeys() : expectKeys;
 
-    function reflectSpec(reflectSpecs: SpecTransformer[], specs: string[]) {
-      return reflectSpecs.find((specObj) => specs.includes(specObj.spec));
+    function reflectField(reflectFields: FieldTransformer[], fields: string[]) {
+      return reflectFields.find((fieldObj) => fields.includes(fieldObj.field));
     }
 
     keys.filter(Boolean).forEach((key) => {
-      let reflectSpecs: SpecTransformer[] = [];
+      let reflectFields: FieldTransformer[] = [];
       let realKey = '' as OutputKey;
       if (typeof key === 'string') {
         realKey = key;
       } else if (typeof key === 'object' && key !== null) {
         realKey = key.key;
       }
-      reflectSpecs = key2SpecMap[realKey] ?? [];
-      if (reflectSpecs.length) {
-        const specObj = reflectSpec(reflectSpecs, avaliableCols);
-        if (specObj) {
-          if (!this.spec2Keys[specObj.spec]) {
-            this.spec2Keys[specObj.spec] = [];
+      reflectFields = key2FieldMap[realKey] ?? [];
+      if (reflectFields.length) {
+        const fieldObj = reflectField(reflectFields, avaliableCols);
+        if (fieldObj) {
+          if (!this.field2Keys[fieldObj.field]) {
+            this.field2Keys[fieldObj.field] = [];
           }
           const keyObj = {
             key: realKey,
           } as KeyTransformer;
-          if (specObj.transformer) {
-            keyObj.transformer = specObj.transformer;
+          if (fieldObj.transformer) {
+            keyObj.transformer = fieldObj.transformer;
           }
-          this.spec2Keys[specObj.spec].push(keyObj);
+          this.field2Keys[fieldObj.field].push(keyObj);
         }
       }
     });
@@ -336,9 +339,9 @@ export default class Ps {
       createSelectOption('-U', PsOutputKey.ruser);
     }
 
-    const specs = this.sortedSpecs;
-    if (specs.length) {
-      params.push(`-o ${specs.join(',')}`);
+    const fields = this.sortedFields;
+    if (fields.length) {
+      params.push(`-o ${fields.join(',')}`);
     }
 
     return params.join(' ');
@@ -350,7 +353,7 @@ export default class Ps {
     // 去除header
     rows.splice(0, 1);
 
-    const cols = this.sortedSpecs;
+    const cols = this.sortedFields;
     const size = cols.length;
     const result = rows.map((row) => {
       const formatted = {} as Record<OutputKey, unknown>;
@@ -365,7 +368,7 @@ export default class Ps {
         newColValues.push(colValues.join(' '));
       }
       newColValues.forEach((source, i) => {
-        const keyObjs = this.spec2Keys[cols[i]];
+        const keyObjs = this.field2Keys[cols[i]];
         keyObjs.forEach((keyObj) => {
           formatted[keyObj.key] = keyObj.transformer
             ? keyObj.transformer(source)
@@ -378,17 +381,9 @@ export default class Ps {
     return result;
   }
 
-  psWrapper(params: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const cmd = `ps ${params}`;
-      exec(cmd, (err, stdout) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve(stdout);
-      });
-    });
+  async psWrapper(params: string): Promise<string> {
+    const { stdout } = await exec(`ps ${params}`);
+    return stdout;
   }
 
   async execute(): Promise<Record<OutputKey, unknown>[]> {

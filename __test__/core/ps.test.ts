@@ -14,7 +14,7 @@ describe('ps', () => {
     );
   });
   test('getAvaliableSpecs', async () => {
-    const result = await Ps.getAvaliableSpecs();
+    const result = await Ps.getAvaliableFields();
     expect(Array.isArray(result)).toBe(true);
     expect(result.length).toBeGreaterThan(0);
     expect(result).toEqual(
@@ -58,7 +58,7 @@ describe('ps', () => {
       .selectBy('ruid', 'root')
       .output(['pcpu', 'pmem', 'etime', 'tty', 'ruid'])
       .execute();
-    console.log('===result===', result);
+    // console.log('===result===', result);
     expect(Array.isArray(result)).toBe(true);
     expect(result.length).toBeGreaterThan(0);
     expect(result.every((item) => item.ruid === 'root')).toBe(false);
