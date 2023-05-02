@@ -1,4 +1,5 @@
 // https://man7.org/linux/man-pages/man1/ps.1.html
+// FIXME: all the code is so far tested in zsh
 /**
  * UNIX格式，短选项，可以组合，以一个横杠开头
  * BSD格式，短选项，可以组合，不横杠开头
@@ -22,6 +23,13 @@
 // T, t 当前tty关联的进程
 // r只在跑着的进程
 import { exec } from 'child_process';
+import {
+  tt2ttyTransformer,
+  cmd2ArgsTransformer,
+  parseFloatTransformer,
+  formatTime2SecTransformer,
+} from './transformer';
+import type { Transformer } from './transformer';
 
 interface Options {
   selectAll: boolean;
@@ -31,6 +39,7 @@ interface Options {
 // consistent with type OutputKey, Ps.avaliableOutputKeys
 export enum PsOutputKey {
   pid = 'pid',
+  ppid = 'ppid',
   tty = 'tty',
   cputime = 'cputime',
   command = 'command',
@@ -39,11 +48,15 @@ export enum PsOutputKey {
   user = 'user',
   ruid = 'ruid',
   ruser = 'ruser',
+  pcpu = 'pcpu',
+  pmem = 'pmem',
+  etime = 'etime',
 }
 
 // consistent with enum PsOutputKey, Ps.avaliableOutputKeys
 type OutputKey = [
   'pid',
+  'ppid',
   'tty',
   'cputime',
   'command',
@@ -51,7 +64,10 @@ type OutputKey = [
   'uid',
   'user',
   'ruid',
-  'ruser'
+  'ruser',
+  'pcpu',
+  'pmem',
+  'etime'
 ][number];
 
 type ExpectKey =
@@ -75,11 +91,9 @@ const equivalentCols: string[][] = [
 
 type Task = () => Promise<void> | void;
 
-type Transformer = (source?: string) => unknown;
-
 interface SpecTransformer {
   spec: string;
-  transformer?: Transformer | null;
+  transformer?: Transformer;
 }
 
 interface KeyTransformer {
@@ -92,37 +106,39 @@ type KeySpec = (string | SpecTransformer)[];
 function generateKey2SpecMap() {
   const originMap: Record<OutputKey, KeySpec> = {
     [PsOutputKey.pid]: ['pid'],
-    [PsOutputKey.tty]: [
-      'tty',
-      { spec: 'tt', transformer: (source?: string) => `tty${source}` },
-    ],
+    [PsOutputKey.ppid]: ['ppid'],
+    [PsOutputKey.tty]: ['tty', 'tt'].map((spec) => ({
+      spec,
+      transformer: tt2ttyTransformer,
+    })),
     [PsOutputKey.cputime]: ['cputime', 'time'],
     // 后3个不包含参数
     // TODO: 是否需要区分，分别返回无参数命令，包含参数命令
     [PsOutputKey.command]: ['command', 'args', 'comm', 'ucomm', 'ucmd'],
-    [PsOutputKey.arguments]: [
-      {
-        spec: 'command',
-        // TODO: 适配
-        transformer: (source?: string) => {
-          const arr = source?.trim().split(' ');
-          arr?.splice(0, 1);
-          return arr || [];
-        },
-      },
-      {
-        spec: 'args',
-        transformer: (source?: string) => {
-          const arr = source?.trim().split(' ');
-          arr?.splice(0, 1);
-          return arr || [];
-        },
-      },
-    ],
+    [PsOutputKey.arguments]: ['command', 'args'].map((spec) => ({
+      spec,
+      transformer: cmd2ArgsTransformer,
+    })),
     [PsOutputKey.uid]: ['uid', 'euid'],
     [PsOutputKey.user]: ['user', 'euser'],
     [PsOutputKey.ruid]: ['ruid'],
     [PsOutputKey.ruser]: ['ruser'],
+    [PsOutputKey.pcpu]: ['pcpu', '%cpu'].map((spec) => ({
+      spec,
+      transformer: parseFloatTransformer,
+    })),
+    [PsOutputKey.pmem]: ['pmem', '%mem'].map((spec) => ({
+      spec,
+      transformer: parseFloatTransformer,
+    })),
+    // @changed
+    [PsOutputKey.etime]: [
+      'etimes',
+      {
+        spec: 'etime',
+        transformer: formatTime2SecTransformer,
+      },
+    ],
   };
   // 序列化成标准格式
   const map = {} as Record<OutputKey, SpecTransformer[]> & {
@@ -150,6 +166,7 @@ const key2SpecMap = generateKey2SpecMap();
 // consistent with enum PsOutputKey, OutputKey
 const avaliableOutputKeys = [
   'pid',
+  'ppid',
   'tty',
   'cputime',
   'command',
@@ -158,6 +175,9 @@ const avaliableOutputKeys = [
   'user',
   'ruid',
   'ruser',
+  'pcpu',
+  'pmem',
+  'etime',
 ];
 
 export default class Ps {
@@ -165,7 +185,7 @@ export default class Ps {
   private spec2Keys: Record<string, KeyTransformer[]>;
   private taskQueue: Task[];
 
-  static currentTty = Symbol('ps.currentTty');
+  // static currentTty = Symbol('ps.currentTty');
   static defaultKeys = [
     PsOutputKey.pid,
     PsOutputKey.tty,
@@ -305,6 +325,8 @@ export default class Ps {
     if (selectAll) {
       params.push('-e');
     } else {
+      createSelectOption('-p', PsOutputKey.pid);
+      createSelectOption('-t', PsOutputKey.tty);
       // 有效用户id或者姓名，进程使用了谁的文件访问权限
       // uid和user查询方式一样，结果不一定跟入参一样，-u root可能返回user不是root的项
       createSelectOption('-u', PsOutputKey.uid);
@@ -323,24 +345,28 @@ export default class Ps {
     return params.join(' ');
   }
 
-  format(stdout: string): any[] {
+  format(stdout: string): Record<OutputKey, unknown>[] {
     const rows = stdout.trim().split('\n');
-    const specs = this.sortedSpecs;
-    const size = specs.length;
+
+    // 去除header
+    rows.splice(0, 1);
+
+    const cols = this.sortedSpecs;
+    const size = cols.length;
     const result = rows.map((row) => {
-      const formatted: any = {};
+      const formatted = {} as Record<OutputKey, unknown>;
       const colValues = row.trim().split(/\s+/);
       let index = 0;
-      const newColValues = [];
-      while (index < size - 1) {
-        newColValues.push(colValues.shift());
+      const newColValues: string[] = [];
+      while (index < size - 1 && colValues.length) {
+        newColValues.push(colValues.shift() as string);
         index++;
       }
       if (colValues.length) {
         newColValues.push(colValues.join(' '));
       }
       newColValues.forEach((source, i) => {
-        const keyObjs = this.spec2Keys[specs[i]];
+        const keyObjs = this.spec2Keys[cols[i]];
         keyObjs.forEach((keyObj) => {
           formatted[keyObj.key] = keyObj.transformer
             ? keyObj.transformer(source)
@@ -349,8 +375,7 @@ export default class Ps {
       });
       return formatted;
     });
-    // 去除header
-    result.splice(0, 1);
+
     return result;
   }
 
@@ -361,8 +386,7 @@ export default class Ps {
     if (!this.hasInitedKeys) {
       await this._output(Ps.defaultKeys);
     }
-    /* eslint-disable-next-line */
-    return new Promise(async (resolve, reject) => {
+    return new Promise((resolve, reject) => {
       const cmd = `ps ${this.createParams()}`;
       console.log('cmd: ', cmd);
       exec(cmd, (err, stdout) => {

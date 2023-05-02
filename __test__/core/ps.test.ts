@@ -9,7 +9,7 @@ describe('ps', () => {
     const result = await ps.execute();
     expect(Array.isArray(result)).toBe(true);
     expect(result.length).toBeGreaterThan(0);
-    expect(Object.keys(result[0] as any)).toEqual(
+    expect(Object.keys(result[0])).toEqual(
       expect.arrayContaining(['pid', 'tty', 'cputime', 'command'])
     );
   });
@@ -44,6 +44,16 @@ describe('ps', () => {
       .selectBy(PsOutputKey.uid, 'root')
       .output(['uid'])
       .execute();
+    expect(Array.isArray(result)).toBe(true);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.every((item) => item.uid === 'root')).toBe(false);
+  });
+  test('get pcpu pmem', async () => {
+    const result = await ps
+      .selectBy('tty', 'ttys027')
+      .output(['pcpu', 'pmem', 'etime', 'tty'])
+      .execute();
+    console.log('===result===', result);
     expect(Array.isArray(result)).toBe(true);
     expect(result.length).toBeGreaterThan(0);
     expect(result.every((item) => item.uid === 'root')).toBe(false);
