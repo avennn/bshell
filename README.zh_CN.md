@@ -8,31 +8,31 @@
 [![Node](https://img.shields.io/node/v/bshell)](./package.json)
 [![License](https://img.shields.io/npm/l/bshell)](./LICENSE)
 
-Provide portable Unix shell commands out of [shelljs](https://github.com/shelljs/shelljs) for Node.js.
+提供[shelljs](https://github.com/shelljs/shelljs)之外的一些便捷的 nodejs 命令。
 
-bshell means "better shell".
+bshell（better shell）意思是更好的 shell。
 
-## Install
+## 安装
 
-With npm
+使用 npm
 
 ```bash
 npm i bshell
 ```
 
-With yarn
+使用 yarn
 
 ```bash
 yarn add bshell
 ```
 
-With pnpm
+使用 pnpm
 
 ```bash
 pnpm add bshell
 ```
 
-## Usage
+## 使用
 
 ### ps
 
