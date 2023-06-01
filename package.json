@@ -13,11 +13,12 @@
     "require": "./dist/cjs/index.js"
   },
   "scripts": {
-    "test": "jest",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest",
     "build": "rm -rf ./dist && npm run build:esm && npm run build:cjs",
-    "build:esm": "./node_modules/.bin/tsc --module nodenext --outDir dist/esm",
-    "build:cjs": "./node_modules/.bin/tsc --module commonjs --outDir dist/cjs",
-    "prepublishOnly": "npm run build"
+    "build:esm": "./node_modules/.bin/tsc --project tsconfig.build.json --module esnext --outDir dist/esm",
+    "build:cjs": "./node_modules/.bin/tsc --project tsconfig.build.json --module commonjs --outDir dist/cjs",
+    "prepublishOnly": "npm run test && npm run build",
+    "postpublish": "node scripts/postPublish.mjs"
   },
   "keywords": [
     "bshell",

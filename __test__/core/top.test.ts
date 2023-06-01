@@ -1,4 +1,4 @@
-import { Top } from '../../src/core';
+import { Top } from '@/core';
 
 describe('top', () => {
   let top: Top;

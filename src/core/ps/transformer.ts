@@ -15,11 +15,6 @@ export const cmd2ArgsTransformer: Transformer<string, string[]> = (source) => {
 
 export const parseFloatTransformer: Transformer<string, number> = (source) => {
   return parseFloat(source);
-  // try {
-  //   return parseFloat(source);
-  // } catch (e) {
-  //   return 0;
-  // }
 };
 
 export const formatTime2SecTransformer: Transformer<string, number> = (

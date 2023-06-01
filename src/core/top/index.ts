@@ -1,7 +1,8 @@
 // https://man7.org/linux/man-pages/man1/top.1.html
 import { spawn } from 'node:child_process';
 import Command from '../command';
-import { noop } from '../../shared';
+import { noop } from '@/shared';
+import autoBind from 'auto-bind';
 
 type EventName = 'data' | 'error' | 'close';
 
@@ -12,10 +13,9 @@ export default class Top extends Command {
 
   constructor() {
     super();
-    this.emitData = this.emitData.bind(this);
-    this.emitError = this.emitError.bind(this);
-    this.emitClose = this.emitClose.bind(this);
+    autoBind(this);
   }
+
   execute(): Promise<unknown> {
     return new Promise((resolve) => {
       resolve('yes');
@@ -29,6 +29,7 @@ export default class Top extends Command {
 
     subProc.stderr.on('data', this.emitError);
     subProc.on('close', this.emitClose);
+    return this;
   }
 
   emitData(data: Buffer) {

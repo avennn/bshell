@@ -5,8 +5,12 @@
     "allowJs": true,
     "outDir": "dist/cjs",
     "declaration": true,
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "paths": {
+      "@/*": ["src/*"]
+    },
+    "module": "ESNext"
   },
-  "include": ["src/**/*", "index.ts", "types/global.d.ts"],
-  "exclude": ["node_modules", "__test__", "dist"]
+  "include": ["src/**/*", "__test__/**/*", "scripts/**/*"],
+  "exclude": ["node_modules", "dist"]
 }
