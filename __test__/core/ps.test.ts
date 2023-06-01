@@ -1,4 +1,4 @@
-import { Ps, PsOutputKey } from '../../src/core';
+import { Ps, PsOutputKey } from '@/core';
 
 describe('ps', () => {
   let ps: Ps;
