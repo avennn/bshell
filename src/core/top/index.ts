@@ -1,10 +1,14 @@
 // https://man7.org/linux/man-pages/man1/top.1.html
-import { spawn } from 'node:child_process';
+import util from 'node:util';
+import { spawn, exec as execLegacy } from 'node:child_process';
 import Command from '../command';
 import { noop } from '@/shared';
 import autoBind from 'auto-bind';
+import parse from './parser';
 
 type EventName = 'data' | 'error' | 'close';
+
+const exec = util.promisify(execLegacy);
 
 export default class Top extends Command {
   #dataCallback: (data: unknown) => unknown = noop;
@@ -16,14 +20,12 @@ export default class Top extends Command {
     autoBind(this);
   }
 
-  execute(): Promise<unknown> {
-    return new Promise((resolve) => {
-      resolve('yes');
-    });
+  async execute(): Promise<unknown> {
+    const { stdout } = await exec('top -l 1');
+    return parse(stdout);
   }
 
   raw(params: string) {
-    // make sure events have listened
     const subProc = spawn('top', params.trim().split(/\s+/));
     subProc.stdout.on('data', this.emitData);
 
